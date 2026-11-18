@@ -1,0 +1,38 @@
+WiFi AutoControl 1.0 — projeto inicial para Windows 11 (alvo .NET 10)
+
+O QUE FAZ
+- Monitora a inatividade real de teclado e mouse.
+- Desliga o adaptador escolhido após o intervalo configurado (15 minutos por padrão).
+- Religa o adaptador ao detectar atividade de teclado ou mouse.
+- Fica na bandeja do sistema, sem janela principal.
+- Permite pausar o monitoramento, alterar o intervalo e escolher o adaptador.
+- Tenta restaurar o Wi-Fi na próxima inicialização se o programa tiver sido encerrado inesperadamente após desligá-lo.
+
+IMPORTANTE
+- Desligar o Wi-Fi encerra conexões de rede sem fio, inclusive RustDesk, chamadas e downloads.
+- O programa NÃO detecta com segurança uma sessão ativa do RustDesk. Pause o monitoramento antes de depender de acesso remoto.
+- O programa exige privilégios de administrador para habilitar/desabilitar adaptadores. A tarefa agendada é criada com nível mais alto para evitar uma pergunta de UAC a cada logon.
+- O contador usa a última atividade de teclado/mouse do Windows. Com 15 minutos, tende a acompanhar o tempo de apagar a tela, mas não lê o estado físico do monitor.
+- Se o Windows estiver configurado para desligar a tela em 15 minutos, o Wi-Fi será desligado aproximadamente no mesmo momento.
+
+GERAR O EXECUTÁVEL
+1. Instale o SDK .NET 10 para Windows (não apenas o runtime).
+2. Extraia esta pasta no computador Windows 11.
+3. Abra PowerShell nesta pasta e execute: .\Build.ps1
+4. O executável será criado em publish\WiFiAutoControl.exe.
+
+INSTALAR
+1. Abra PowerShell como Administrador nesta pasta.
+2. Execute: .\Install.ps1
+3. O programa será iniciado e abrirá automaticamente nos próximos logons.
+
+USO
+- Clique com o botão direito no ícone do programa, perto do relógio.
+- Deixe “Monitoramento automático” marcado.
+- Confira o adaptador selecionado (normalmente “Wi-Fi”).
+- O padrão é 15 minutos.
+- “Reativar Wi-Fi agora” liga o adaptador imediatamente.
+- “Sair” encerra o programa; se ele tiver desligado o Wi-Fi, tenta religá-lo antes de sair.
+
+DESINSTALAR
+Execute .\Uninstall.ps1 em PowerShell como Administrador. Depois, apague a pasta do projeto.
