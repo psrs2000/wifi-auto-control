@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "+xnfRU62+P8=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\psrs5\\Downloads\\WiFi-AutoControl-correcao\\WiFi-AutoControl\\WiFiAutoControl.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\psrs5\\.nuget\\packages\\microsoft.net.illink.tasks\\10.0.15\\microsoft.net.illink.tasks.10.0.15.nupkg.sha512",
+    "C:\\Users\\psrs5\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\10.0.15\\microsoft.netcore.app.runtime.win-x64.10.0.15.nupkg.sha512",
+    "C:\\Users\\psrs5\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\10.0.15\\microsoft.windowsdesktop.app.runtime.win-x64.10.0.15.nupkg.sha512",
+    "C:\\Users\\psrs5\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\10.0.15\\microsoft.aspnetcore.app.runtime.win-x64.10.0.15.nupkg.sha512"
+  ],
+  "logs": []
+}
