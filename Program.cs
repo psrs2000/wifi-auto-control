@@ -56,11 +56,25 @@ internal sealed class TrayAppContext : ApplicationContext
         // Se o programa anterior caiu enquanto havia desligado o adaptador,
         // tenta restaurar o Wi-Fi no próximo início.
         if (settings.DisabledByThisApp)
+            _ = RestoreAfterUnexpectedExitAsync();
+        UpdateTrayText();
+    }
+
+    private async Task RestoreAfterUnexpectedExitAsync()
+    {
+        busy = true; // impede que o TickAsync tente religar o adaptador ao mesmo tempo
+        try
         {
-            _ = SetAdapterEnabled(true);
-            settings.DisabledByThisApp = false;
-            SaveSettings();
+            // Só zera o marcador se o Enable-NetAdapter confirmar sucesso. Se falhar, ele
+            // continua true: o TickAsync tenta de novo ao detectar atividade, e a próxima
+            // inicialização também.
+            if (await SetAdapterEnabled(true))
+            {
+                settings.DisabledByThisApp = false;
+                SaveSettings();
+            }
         }
+        finally { busy = false; }
         UpdateTrayText();
     }
 
@@ -114,10 +128,20 @@ internal sealed class TrayAppContext : ApplicationContext
         foreach (string name in GetAdapterNames())
         {
             var item = new ToolStripMenuItem(name) { Checked = string.Equals(name, settings.AdapterName, StringComparison.OrdinalIgnoreCase) };
-            item.Click += (_, _) =>
+            item.Click += async (_, _) =>
             {
-                if (settings.DisabledByThisApp) _ = SetAdapterEnabled(true);
-                settings.DisabledByThisApp = false;
+                if (settings.DisabledByThisApp)
+                {
+                    // Religa o adaptador atual antes de trocar. Se falhar, não troca: o
+                    // marcador DisabledByThisApp precisa continuar apontando para o
+                    // adaptador que ficou desligado, para ser religado depois.
+                    if (!await SetAdapterEnabled(true))
+                    {
+                        MessageBox.Show($"Não foi possível religar o adaptador \"{settings.AdapterName}\". O adaptador selecionado não foi alterado.", "WiFi AutoControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    settings.DisabledByThisApp = false;
+                }
                 settings.AdapterName = name;
                 SaveSettings();
                 RebuildMenu();
@@ -132,14 +156,29 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(adapter);
 
         menu.Items.Add(new ToolStripSeparator());
-        var statusNow = new ToolStripMenuItem(GetAdapterStatus()) { Enabled = false };
+        var statusNow = new ToolStripMenuItem("Estado: verificando…") { Enabled = false };
         menu.Items.Add(statusNow);
+        // Consulta o estado real a cada abertura do menu, em segundo plano, para não
+        // atrasar a exibição do menu enquanto o PowerShell responde.
+        menu.Opening += async (_, _) =>
+        {
+            statusNow.Text = "Estado: verificando…";
+            string text = await Task.Run(() => GetAdapterStatus());
+            if (!statusNow.IsDisposed) statusNow.Text = text;
+        };
         var pause = new ToolStripMenuItem("Reativar Wi-Fi agora");
         pause.Click += async (_, _) =>
         {
-            await SetAdapterEnabled(true);
-            settings.DisabledByThisApp = false;
-            SaveSettings();
+            // Só zera o marcador se o Enable-NetAdapter confirmar sucesso.
+            if (await SetAdapterEnabled(true))
+            {
+                settings.DisabledByThisApp = false;
+                SaveSettings();
+            }
+            else
+            {
+                MessageBox.Show($"Não foi possível religar o adaptador \"{settings.AdapterName}\".", "WiFi AutoControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             UpdateTrayText();
         };
         menu.Items.Add(pause);
@@ -181,23 +220,36 @@ internal sealed class TrayAppContext : ApplicationContext
         UpdateTrayText();
     }
 
-    private async Task<bool> SetAdapterEnabled(bool enabled)
+    private async Task<bool> SetAdapterEnabled(bool enabled, int timeoutMs = 30_000)
     {
         string cmd = enabled
             ? $"Enable-NetAdapter -Name {PsQuote(settings.AdapterName)} -Confirm:$false -ErrorAction Stop"
             : $"Disable-NetAdapter -Name {PsQuote(settings.AdapterName)} -Confirm:$false -ErrorAction Stop";
         try
         {
+            // stdout/stderr não são redirecionados: ninguém os lê, e um pipe cheio
+            // deixaria o PowerShell bloqueado esperando espaço para escrever.
             var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"" + cmd.Replace("\"", "`\"") + "\"")
             {
                 UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true
+                CreateNoWindow = true
             };
             using var p = Process.Start(psi);
             if (p == null) return false;
-            await p.WaitForExitAsync();
+            using var cts = new CancellationTokenSource(timeoutMs);
+            try
+            {
+                // ConfigureAwait(false): a continuação não precisa da thread da UI. Sem isso,
+                // ExitThreadCore (que bloqueia a UI com GetResult()) entraria em deadlock.
+                await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // O PowerShell não respondeu a tempo: encerra e informa falha, para que o
+                // chamador não fique esperando para sempre nem zere DisabledByThisApp.
+                try { p.Kill(entireProcessTree: true); } catch { }
+                return false;
+            }
             return p.ExitCode == 0;
         }
         catch { return false; }
@@ -234,14 +286,26 @@ internal sealed class TrayAppContext : ApplicationContext
         catch { return "Estado do Wi-Fi indisponível"; }
     }
 
-    private static string RunPowerShell(string command)
+    private static string RunPowerShell(string command, int timeoutMs = 5000)
     {
         var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"" + command.Replace("\"", "`\"") + "\"")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         using var p = Process.Start(psi) ?? throw new Exception("Não foi possível iniciar o PowerShell.");
-        string output = p.StandardOutput.ReadToEnd();
-        p.WaitForExit(5000);
-        return output;
+        // Lê stdout e stderr em segundo plano. Um ReadToEnd() síncrono só retorna quando o
+        // processo fecha a saída, ou seja, o timeout de WaitForExit nunca chegava a valer;
+        // e um stderr redirecionado sem leitura pode encher o pipe e travar o PowerShell.
+        Task<string> stdout = p.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(timeoutMs))
+        {
+            try { p.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"O PowerShell não respondeu em {timeoutMs / 1000} s.");
+        }
+        // O processo já terminou; os pipes fecham em seguida. O limite extra evita ficar
+        // preso caso algum processo filho tenha herdado o pipe e o mantenha aberto.
+        if (!Task.WaitAll(new Task[] { stdout, stderr }, 1000))
+            throw new TimeoutException("A saída do PowerShell não foi concluída.");
+        return stdout.Result;
     }
 
     private void UpdateTrayText()
@@ -265,9 +329,21 @@ internal sealed class TrayAppContext : ApplicationContext
         timer.Stop();
         if (settings.DisabledByThisApp)
         {
-            try { SetAdapterEnabled(true).GetAwaiter().GetResult(); } catch { }
+            // Bloquear aqui é seguro porque SetAdapterEnabled usa ConfigureAwait(false)
+            // e não depende da thread da UI (que está parada neste GetResult()).
+            // O limite de 10 s evita que o "Sair" fique travado se o PowerShell não responder.
+            bool ok = false;
+            try { ok = SetAdapterEnabled(true, 10_000).GetAwaiter().GetResult(); } catch { }
+            if (ok)
+            {
+                settings.DisabledByThisApp = false;
+            }
+            else
+            {
+                // Mantém o marcador: a próxima inicialização tenta religar o adaptador.
+                MessageBox.Show($"Não foi possível religar o adaptador \"{settings.AdapterName}\". O programa tentará novamente na próxima vez que for iniciado.", "WiFi AutoControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
-        settings.DisabledByThisApp = false;
         SaveSettings();
         tray.Visible = false;
         tray.Dispose();
